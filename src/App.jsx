@@ -17,7 +17,8 @@ async function deleteRow(table, id) {
   if (error) throw error;
 }
 async function uploadPhoto(file) {
-  const filename = `${Date.now()}_${file.name.replace(/\s+/g, "_")}`;
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+    const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
   const { error } = await supabase.storage.from("photos").upload(filename, file);
   if (error) throw error;
   const { data } = supabase.storage.from("photos").getPublicUrl(filename);
