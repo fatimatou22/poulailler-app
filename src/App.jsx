@@ -2,8 +2,12 @@ import { useState, useEffect, useRef } from "react";
 import { LayoutDashboard, Egg, Users, Wallet, Skull, Syringe, Bird, Plus, X, Camera, TrendingUp, Trash2, PawPrint } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
-// ⚠️ Adresse de tes scripts PHP dans XAMPP. Change-la si besoin.
-const API = "https://poulailler.infinityfreeapp.com";
+// Adresse du relais (le proxy Vercel qu'on vient d'ajouter) : même site que
+// l'appli, donc aucun blocage CORS possible côté navigateur.
+const API = "/api/proxy";
+// Adresse réelle du serveur PHP, utilisée UNIQUEMENT pour afficher les photos
+// (afficher une image ne déclenche jamais de blocage CORS, contrairement à fetch()).
+const IMAGE_BASE = "https://poulailler.infinityfreeapp.com";
 
 async function apiGet(path) {
   const res = await fetch(`${API}/${path}`);
@@ -25,15 +29,17 @@ async function apiDelete(path, id) {
   return res.json();
 }
 async function uploadPhoto(file) {
-  const formData = new FormData();
-  formData.append("photo", file);
-  const res = await fetch(`${API}/upload.php`, { method: "POST", body: formData });
-  if (!res.ok) throw new Error("Erreur upload");
-  const data = await res.json();
-  return data.photo_path;
+  const base64 = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const result = await apiPost("upload.php", { filename: file.name, data: base64 });
+  return result.photo_path;
 }
 function photoUrl(path) {
-  return path ? `${API}/${path}` : null;
+  return path ? `${IMAGE_BASE}/${path}` : null;
 }
 
 function fmt(n) {
