@@ -3,7 +3,7 @@ import { LayoutDashboard, Egg, Users, Wallet, Skull, Syringe, Bird, Plus, X, Cam
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 // ⚠️ Adresse de tes scripts PHP dans XAMPP. Change-la si besoin.
-const API = "http://localhost/php-api";
+const API = "https://poulailler.infinityfreeapp.com";
 
 async function apiGet(path) {
   const res = await fetch(`${API}/${path}`);
