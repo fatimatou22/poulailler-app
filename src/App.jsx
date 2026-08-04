@@ -1,45 +1,30 @@
 import { useState, useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
 import { LayoutDashboard, Egg, Users, Wallet, Skull, Syringe, Bird, Plus, X, Camera, TrendingUp, Trash2, PawPrint } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
-// Adresse du relais (le proxy Vercel qu'on vient d'ajouter) : même site que
-// l'appli, donc aucun blocage CORS possible côté navigateur.
-const API = "/api/proxy";
-// Adresse réelle du serveur PHP, utilisée UNIQUEMENT pour afficher les photos
-// (afficher une image ne déclenche jamais de blocage CORS, contrairement à fetch()).
-const IMAGE_BASE = "https://poulailler.infinityfreeapp.com";
+const supabase = createClient(
+  "https://socfymhrxvryctzpsqpy.supabase.co",
+  "sb_publishable_FpFeLbnb46SP4oFA1f_UzQ_lDligJg7"
+);
 
-async function apiGet(path) {
-  const res = await fetch(`${API}/${path}`);
-  if (!res.ok) throw new Error(`Erreur ${path}`);
-  return res.json();
+async function insertRow(table, payload) {
+  const { error } = await supabase.from(table).insert(payload);
+  if (error) throw error;
 }
-async function apiPost(path, body) {
-  const res = await fetch(`${API}/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`Erreur ${path}`);
-  return res.json();
-}
-async function apiDelete(path, id) {
-  const res = await fetch(`${API}/${path}?id=${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`Erreur ${path}`);
-  return res.json();
+async function deleteRow(table, id) {
+  const { error } = await supabase.from(table).delete().eq("id", id);
+  if (error) throw error;
 }
 async function uploadPhoto(file) {
-  const base64 = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-  const result = await apiPost("upload.php", { filename: file.name, data: base64 });
-  return result.photo_path;
+  const filename = `${Date.now()}_${file.name.replace(/\s+/g, "_")}`;
+  const { error } = await supabase.storage.from("photos").upload(filename, file);
+  if (error) throw error;
+  const { data } = supabase.storage.from("photos").getPublicUrl(filename);
+  return data.publicUrl;
 }
 function photoUrl(path) {
-  return path ? `${IMAGE_BASE}/${path}` : null;
+  return path || null;
 }
 
 function fmt(n) {
@@ -144,17 +129,39 @@ export default function PoulaillerApp() {
   const [categories, setCategories] = useState([]);
 
   async function reload(table) {
-    const map = {
-      races: () => apiGet("races.php").then(setRaces),
-      categories: () => apiGet("categories.php").then(setCategories),
-      productions: () => apiGet("productions.php").then(setProductions),
-      expenses: () => apiGet("expenses.php").then(setExpenses),
-      clients: () => apiGet("clients.php").then(setClients),
-      orders: () => apiGet("orders.php").then(setOrders),
-      deaths: () => apiGet("deaths.php").then(setDeaths),
-      vaccinations: () => apiGet("vaccinations.php").then(setVaccinations),
-    };
-    return map[table]();
+    if (table === "races") {
+      const { data, error } = await supabase.from("races").select("*").order("name");
+      if (error) throw error;
+      setRaces(data || []);
+    } else if (table === "categories") {
+      const { data, error } = await supabase.from("expense_categories").select("*").order("name");
+      if (error) throw error;
+      setCategories(data || []);
+    } else if (table === "productions") {
+      const { data, error } = await supabase.from("productions").select("*, races(name)").order("production_date", { ascending: false });
+      if (error) throw error;
+      setProductions((data || []).map((p) => ({ ...p, race_name: p.races?.name })));
+    } else if (table === "expenses") {
+      const { data, error } = await supabase.from("expenses").select("*, expense_categories(name)").order("expense_date", { ascending: false });
+      if (error) throw error;
+      setExpenses((data || []).map((e) => ({ ...e, category_name: e.expense_categories?.name })));
+    } else if (table === "clients") {
+      const { data, error } = await supabase.from("clients").select("*").order("name");
+      if (error) throw error;
+      setClients(data || []);
+    } else if (table === "orders") {
+      const { data, error } = await supabase.from("orders").select("*, clients(name, phone, location)").order("delivery_date", { ascending: false });
+      if (error) throw error;
+      setOrders((data || []).map((o) => ({ ...o, client_name: o.clients?.name, client_phone: o.clients?.phone, client_location: o.clients?.location })));
+    } else if (table === "deaths") {
+      const { data, error } = await supabase.from("deaths").select("*, races(name)").order("death_date", { ascending: false });
+      if (error) throw error;
+      setDeaths((data || []).map((d) => ({ ...d, race_name: d.races?.name })));
+    } else if (table === "vaccinations") {
+      const { data, error } = await supabase.from("vaccinations").select("*, races(name)").order("vaccination_date", { ascending: false });
+      if (error) throw error;
+      setVaccinations((data || []).map((v) => ({ ...v, race_name: v.races?.name })));
+    }
   }
 
   useEffect(() => {
@@ -166,7 +173,7 @@ export default function PoulaillerApp() {
           reload("deaths"), reload("vaccinations"),
         ]);
       } catch (e) {
-        setErrorMsg("Impossible de contacter le serveur PHP. Vérifie qu'Apache et MySQL tournent dans XAMPP.");
+        setErrorMsg("Impossible de contacter la base de données : " + e.message);
       }
       setReady(true);
     })();
@@ -278,13 +285,13 @@ export default function PoulaillerApp() {
             races={races}
             onAdd={async (p) => {
               const photo_path = p.photo instanceof File ? await uploadPhoto(p.photo) : null;
-              await apiPost("productions.php", {
+              await insertRow("productions", {
                 production_date: p.date, quantity: p.quantity, unit_price: p.prixUnitaire,
                 race_id: p.raceId || null, photo_path,
               });
               await reload("productions");
             }}
-            onDelete={async (id) => { await apiDelete("productions.php", id); await reload("productions"); }}
+            onDelete={async (id) => { await deleteRow("productions", id); await reload("productions"); }}
           />
         )}
 
@@ -292,16 +299,16 @@ export default function PoulaillerApp() {
           <SalesTab
             clients={clients}
             orders={orders}
-            onAddClient={async (c) => { await apiPost("clients.php", c); await reload("clients"); }}
+            onAddClient={async (c) => { await insertRow("clients", c); await reload("clients"); }}
             onAddOrder={async (o) => {
-              await apiPost("orders.php", {
+              await insertRow("orders", {
                 client_id: o.clientId, plateaux: o.plateaux, unit_price: o.prixUnitaire,
                 delivery_date: o.dateLivraison, amount_paid: o.montantPaye,
               });
               await reload("orders");
             }}
-            onDeleteOrder={async (id) => { await apiDelete("orders.php", id); await reload("orders"); }}
-            onDeleteClient={async (id) => { await apiDelete("clients.php", id); await reload("clients"); await reload("orders"); }}
+            onDeleteOrder={async (id) => { await deleteRow("orders", id); await reload("orders"); }}
+            onDeleteClient={async (id) => { await deleteRow("clients", id); await reload("clients"); await reload("orders"); }}
           />
         )}
 
@@ -311,13 +318,13 @@ export default function PoulaillerApp() {
             categories={categories}
             onAdd={async (e) => {
               const photo_path = e.photo instanceof File ? await uploadPhoto(e.photo) : null;
-              await apiPost("expenses.php", {
+              await insertRow("expenses", {
                 category_id: e.categoryId, amount: e.amount, expense_date: e.date, note: e.note, photo_path,
               });
               await reload("expenses");
             }}
-            onDelete={async (id) => { await apiDelete("expenses.php", id); await reload("expenses"); }}
-            onAddCategory={async (name) => { await apiPost("categories.php", { name }); await reload("categories"); }}
+            onDelete={async (id) => { await deleteRow("expenses", id); await reload("expenses"); }}
+            onAddCategory={async (name) => { await insertRow("expense_categories", { name }); await reload("categories"); }}
           />
         )}
 
@@ -327,12 +334,12 @@ export default function PoulaillerApp() {
             races={races}
             onAdd={async (d) => {
               const photo_path = d.photo instanceof File ? await uploadPhoto(d.photo) : null;
-              await apiPost("deaths.php", {
+              await insertRow("deaths", {
                 death_date: d.date, count: d.count, cause: d.cause, race_id: d.raceId || null, photo_path,
               });
               await reload("deaths");
             }}
-            onDelete={async (id) => { await apiDelete("deaths.php", id); await reload("deaths"); }}
+            onDelete={async (id) => { await deleteRow("deaths", id); await reload("deaths"); }}
           />
         )}
 
@@ -341,18 +348,18 @@ export default function PoulaillerApp() {
             vaccinations={vaccinations}
             races={races}
             onAdd={async (v) => {
-              await apiPost("vaccinations.php", { vaccination_date: v.date, vaccine_name: v.vaccine, race_id: v.raceId || null });
+              await insertRow("vaccinations", { vaccination_date: v.date, vaccine_name: v.vaccine, race_id: v.raceId || null });
               await reload("vaccinations");
             }}
-            onDelete={async (id) => { await apiDelete("vaccinations.php", id); await reload("vaccinations"); }}
+            onDelete={async (id) => { await deleteRow("vaccinations", id); await reload("vaccinations"); }}
           />
         )}
 
         {tab === "races" && (
           <RacesTab
             races={races}
-            onAdd={async (name) => { await apiPost("races.php", { name }); await reload("races"); }}
-            onDelete={async (id) => { await apiDelete("races.php", id); await reload("races"); }}
+            onAdd={async (name) => { await insertRow("races", { name }); await reload("races"); }}
+            onDelete={async (id) => { await deleteRow("races", id); await reload("races"); }}
           />
         )}
 
