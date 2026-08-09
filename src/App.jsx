@@ -119,10 +119,77 @@ function StatCard({ label, value, sub, tone = "emerald" }) {
   );
 }
 
+function ProjectSelector({ projects, onSelect, onCreate }) {
+  const [showNew, setShowNew] = useState(false);
+  const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setCreating(true);
+    await onCreate(name.trim());
+    setCreating(false);
+  }
+
+  return (
+    <div className="bg-stone-50 rounded-2xl overflow-hidden" style={{ fontFamily: "system-ui, sans-serif" }}>
+      <div className="bg-emerald-800 text-white px-5 py-4">
+        <div className="flex items-center gap-2">
+          <PawPrint size={20} />
+          <h1 className="text-lg font-semibold">Choisir un projet</h1>
+        </div>
+        <p className="text-emerald-100 text-xs mt-1">Chaque projet a ses propres données, séparées des autres.</p>
+      </div>
+      <div className="p-4 space-y-4">
+        {projects.length === 0 && !showNew && (
+          <p className="text-sm text-stone-400">Aucun projet pour l'instant. Crée le premier ci-dessous.</p>
+        )}
+        <div className="space-y-2">
+          {projects.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => onSelect(p.id)}
+              className="w-full text-left bg-white rounded-2xl border border-stone-200 p-4 hover:border-emerald-400 flex items-center justify-between"
+            >
+              <span className="text-sm font-medium text-stone-800">{p.name}</span>
+              <span className="text-emerald-700 text-sm">Entrer →</span>
+            </button>
+          ))}
+        </div>
+
+        {showNew ? (
+          <Card>
+            <form onSubmit={submit}>
+              <Field label="Nom du nouveau projet"><input autoFocus className={inputCls} value={name} onChange={(e) => setName(e.target.value)} placeholder="ex: Élevage de porcs" /></Field>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setShowNew(false)} className="flex-1 bg-stone-100 text-stone-600 rounded-lg py-2.5 text-sm font-medium">Annuler</button>
+                <button disabled={creating} className="flex-1 bg-emerald-700 text-white rounded-lg py-2.5 text-sm font-medium disabled:opacity-50">
+                  {creating ? "Création..." : "Créer"}
+                </button>
+              </div>
+            </form>
+          </Card>
+        ) : (
+          <button onClick={() => setShowNew(true)} className="w-full border border-dashed border-emerald-400 text-emerald-700 rounded-2xl py-3 text-sm font-medium flex items-center justify-center gap-1">
+            <Plus size={16} /> Créer un nouveau projet
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function PoulaillerApp() {
   const [tab, setTab] = useState("dashboard");
   const [ready, setReady] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
+
+  const [projects, setProjects] = useState([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  const [currentProjectId, setCurrentProjectId] = useState(() => {
+    try { return localStorage.getItem("poulailler_project_id") || null; } catch { return null; }
+  });
 
   const [expenses, setExpenses] = useState([]);
   const [productions, setProductions] = useState([]);
@@ -133,43 +200,89 @@ export default function PoulaillerApp() {
   const [races, setRaces] = useState([]);
   const [categories, setCategories] = useState([]);
 
+  async function loadProjects() {
+    const { data, error } = await supabase.from("projects").select("*").order("name");
+    if (error) throw error;
+    setProjects(data || []);
+  }
+
+  async function createProject(name) {
+    const { data, error } = await supabase.from("projects").insert({ name }).select().single();
+    if (error) throw error;
+    const pid = data.id;
+    await insertRow("races", { name: "Leghorn", project_id: pid });
+    await insertRow("races", { name: "Sasso", project_id: pid });
+    await insertRow("races", { name: "Kabir", project_id: pid });
+    for (const cat of ["Aliments", "Matériel", "Rénovation", "Vaccins", "Transport", "Main-d'œuvre", "Autre"]) {
+      await insertRow("expense_categories", { name: cat, project_id: pid });
+    }
+    await loadProjects();
+    selectProject(pid);
+  }
+
+  function selectProject(id) {
+    setCurrentProjectId(id);
+    try { localStorage.setItem("poulailler_project_id", id); } catch {}
+  }
+
+  function changeProject() {
+    setCurrentProjectId(null);
+    try { localStorage.removeItem("poulailler_project_id"); } catch {}
+    setExpenses([]); setProductions([]); setClients([]); setOrders([]);
+    setDeaths([]); setVaccinations([]); setRaces([]); setCategories([]);
+  }
+
   async function reload(table) {
+    const pid = currentProjectId;
     if (table === "races") {
-      const { data, error } = await supabase.from("races").select("*").order("name");
+      const { data, error } = await supabase.from("races").select("*").eq("project_id", pid).order("name");
       if (error) throw error;
       setRaces(data || []);
     } else if (table === "categories") {
-      const { data, error } = await supabase.from("expense_categories").select("*").order("name");
+      const { data, error } = await supabase.from("expense_categories").select("*").eq("project_id", pid).order("name");
       if (error) throw error;
       setCategories(data || []);
     } else if (table === "productions") {
-      const { data, error } = await supabase.from("productions").select("*, races(name)").order("production_date", { ascending: false });
+      const { data, error } = await supabase.from("productions").select("*, races(name)").eq("project_id", pid).order("production_date", { ascending: false });
       if (error) throw error;
       setProductions((data || []).map((p) => ({ ...p, race_name: p.races?.name })));
     } else if (table === "expenses") {
-      const { data, error } = await supabase.from("expenses").select("*, expense_categories(name)").order("expense_date", { ascending: false });
+      const { data, error } = await supabase.from("expenses").select("*, expense_categories(name)").eq("project_id", pid).order("expense_date", { ascending: false });
       if (error) throw error;
       setExpenses((data || []).map((e) => ({ ...e, category_name: e.expense_categories?.name })));
     } else if (table === "clients") {
-      const { data, error } = await supabase.from("clients").select("*").order("name");
+      const { data, error } = await supabase.from("clients").select("*").eq("project_id", pid).order("name");
       if (error) throw error;
       setClients(data || []);
     } else if (table === "orders") {
-      const { data, error } = await supabase.from("orders").select("*, clients(name, phone, location)").order("delivery_date", { ascending: false });
+      const { data, error } = await supabase.from("orders").select("*, clients(name, phone, location)").eq("project_id", pid).order("delivery_date", { ascending: false });
       if (error) throw error;
       setOrders((data || []).map((o) => ({ ...o, client_name: o.clients?.name, client_phone: o.clients?.phone, client_location: o.clients?.location })));
     } else if (table === "deaths") {
-      const { data, error } = await supabase.from("deaths").select("*, races(name)").order("death_date", { ascending: false });
+      const { data, error } = await supabase.from("deaths").select("*, races(name)").eq("project_id", pid).order("death_date", { ascending: false });
       if (error) throw error;
       setDeaths((data || []).map((d) => ({ ...d, race_name: d.races?.name })));
     } else if (table === "vaccinations") {
-      const { data, error } = await supabase.from("vaccinations").select("*, races(name)").order("vaccination_date", { ascending: false });
+      const { data, error } = await supabase.from("vaccinations").select("*, races(name)").eq("project_id", pid).order("vaccination_date", { ascending: false });
       if (error) throw error;
       setVaccinations((data || []).map((v) => ({ ...v, race_name: v.races?.name })));
     }
   }
 
   useEffect(() => {
+    (async () => {
+      try {
+        await loadProjects();
+      } catch (e) {
+        setErrorMsg("Impossible de contacter la base de données : " + e.message);
+      }
+      setProjectsLoaded(true);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!currentProjectId) return;
+    setReady(false);
     (async () => {
       try {
         await Promise.all([
@@ -182,7 +295,7 @@ export default function PoulaillerApp() {
       }
       setReady(true);
     })();
-  }, []);
+  }, [currentProjectId]);
 
   const totalExpenses = expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
   const totalProduced = productions.reduce((s, p) => s + Number(p.quantity || 0), 0);
@@ -216,16 +329,32 @@ export default function PoulaillerApp() {
     { id: "photos", label: "Photos", icon: Camera },
   ];
 
+  if (!projectsLoaded) {
+    return <div className="p-8 text-center text-stone-400 text-sm">Chargement…</div>;
+  }
+
+  if (!currentProjectId) {
+    return <ProjectSelector projects={projects} onSelect={selectProject} onCreate={createProject} />;
+  }
+
   if (!ready) {
     return <div className="p-8 text-center text-stone-400 text-sm">Chargement des données du poulailler…</div>;
   }
 
+  const currentProject = projects.find((p) => String(p.id) === String(currentProjectId));
+
   return (
     <div className="bg-stone-50 rounded-2xl overflow-hidden" style={{ fontFamily: "system-ui, sans-serif" }}>
       <div className="bg-emerald-800 text-white px-5 py-4">
-        <div className="flex items-center gap-2">
-          <PawPrint size={20} />
-          <h1 className="text-lg font-semibold">Gestion du poulailler</h1>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <PawPrint size={20} />
+            <div>
+              <h1 className="text-lg font-semibold leading-tight">Gestion du poulailler</h1>
+              {currentProject && <div className="text-emerald-200 text-xs">{currentProject.name}</div>}
+            </div>
+          </div>
+          <button onClick={changeProject} className="text-xs text-emerald-100 underline whitespace-nowrap">Changer de projet</button>
         </div>
       </div>
 
@@ -292,7 +421,7 @@ export default function PoulaillerApp() {
               const photo_path = p.photo instanceof File ? await uploadPhoto(p.photo) : null;
               await insertRow("productions", {
                 production_date: p.date, quantity: p.quantity, unit_price: p.prixUnitaire,
-                race_id: p.raceId || null, photo_path,
+                race_id: p.raceId || null, photo_path, project_id: currentProjectId,
               });
               await reload("productions");
             }}
@@ -312,11 +441,11 @@ export default function PoulaillerApp() {
           <SalesTab
             clients={clients}
             orders={orders}
-            onAddClient={async (c) => { await insertRow("clients", c); await reload("clients"); }}
+            onAddClient={async (c) => { await insertRow("clients", { ...c, project_id: currentProjectId }); await reload("clients"); }}
             onAddOrder={async (o) => {
               await insertRow("orders", {
                 client_id: o.clientId, plateaux: o.plateaux, unit_price: o.prixUnitaire,
-                delivery_date: o.dateLivraison, amount_paid: o.montantPaye,
+                delivery_date: o.dateLivraison, amount_paid: o.montantPaye, project_id: currentProjectId,
               });
               await reload("orders");
             }}
@@ -340,12 +469,12 @@ export default function PoulaillerApp() {
             onAdd={async (e) => {
               const photo_path = e.photo instanceof File ? await uploadPhoto(e.photo) : null;
               await insertRow("expenses", {
-                category_id: e.categoryId, amount: e.amount, expense_date: e.date, note: e.note, photo_path,
+                category_id: e.categoryId, amount: e.amount, expense_date: e.date, note: e.note, photo_path, project_id: currentProjectId,
               });
               await reload("expenses");
             }}
             onDelete={async (id) => { await deleteRow("expenses", id); await reload("expenses"); }}
-            onAddCategory={async (name) => { await insertRow("expense_categories", { name }); await reload("categories"); }}
+            onAddCategory={async (name) => { await insertRow("expense_categories", { name, project_id: currentProjectId }); await reload("categories"); }}
             onUpdate={async (id, e) => {
               const photo_path = e.photo instanceof File ? await uploadPhoto(e.photo) : e.existingPhoto ?? null;
               await updateRow("expenses", id, {
@@ -363,7 +492,7 @@ export default function PoulaillerApp() {
             onAdd={async (d) => {
               const photo_path = d.photo instanceof File ? await uploadPhoto(d.photo) : null;
               await insertRow("deaths", {
-                death_date: d.date, count: d.count, cause: d.cause, race_id: d.raceId || null, photo_path,
+                death_date: d.date, count: d.count, cause: d.cause, race_id: d.raceId || null, photo_path, project_id: currentProjectId,
               });
               await reload("deaths");
             }}
@@ -383,7 +512,7 @@ export default function PoulaillerApp() {
             vaccinations={vaccinations}
             races={races}
             onAdd={async (v) => {
-              await insertRow("vaccinations", { vaccination_date: v.date, vaccine_name: v.vaccine, race_id: v.raceId || null });
+              await insertRow("vaccinations", { vaccination_date: v.date, vaccine_name: v.vaccine, race_id: v.raceId || null, project_id: currentProjectId });
               await reload("vaccinations");
             }}
             onDelete={async (id) => { await deleteRow("vaccinations", id); await reload("vaccinations"); }}
@@ -397,7 +526,7 @@ export default function PoulaillerApp() {
         {tab === "races" && (
           <RacesTab
             races={races}
-            onAdd={async (name) => { await insertRow("races", { name }); await reload("races"); }}
+            onAdd={async (name) => { await insertRow("races", { name, project_id: currentProjectId }); await reload("races"); }}
             onDelete={async (id) => { await deleteRow("races", id); await reload("races"); }}
             onUpdate={async (id, name) => { await updateRow("races", id, { name }); await reload("races"); }}
           />
