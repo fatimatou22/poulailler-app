@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
-import { LayoutDashboard, Egg, Users, Wallet, Skull, Syringe, Bird, Plus, X, Camera, TrendingUp, Trash2, PawPrint } from "lucide-react";
+import { LayoutDashboard, Egg, Users, Wallet, Skull, Syringe, Bird, Plus, X, Camera, TrendingUp, Trash2, PawPrint, Pencil } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 const supabase = createClient(
@@ -12,13 +12,17 @@ async function insertRow(table, payload) {
   const { error } = await supabase.from(table).insert(payload);
   if (error) throw error;
 }
+async function updateRow(table, id, payload) {
+  const { error } = await supabase.from(table).update(payload).eq("id", id);
+  if (error) throw error;
+}
 async function deleteRow(table, id) {
   const { error } = await supabase.from(table).delete().eq("id", id);
   if (error) throw error;
 }
 async function uploadPhoto(file) {
   const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
-    const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+  const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
   const { error } = await supabase.storage.from("photos").upload(filename, file);
   if (error) throw error;
   const { data } = supabase.storage.from("photos").getPublicUrl(filename);
@@ -293,6 +297,14 @@ export default function PoulaillerApp() {
               await reload("productions");
             }}
             onDelete={async (id) => { await deleteRow("productions", id); await reload("productions"); }}
+            onUpdate={async (id, p) => {
+              const photo_path = p.photo instanceof File ? await uploadPhoto(p.photo) : p.existingPhoto ?? null;
+              await updateRow("productions", id, {
+                production_date: p.date, quantity: p.quantity, unit_price: p.prixUnitaire,
+                race_id: p.raceId || null, photo_path,
+              });
+              await reload("productions");
+            }}
           />
         )}
 
@@ -310,6 +322,14 @@ export default function PoulaillerApp() {
             }}
             onDeleteOrder={async (id) => { await deleteRow("orders", id); await reload("orders"); }}
             onDeleteClient={async (id) => { await deleteRow("clients", id); await reload("clients"); await reload("orders"); }}
+            onUpdateOrder={async (id, o) => {
+              await updateRow("orders", id, {
+                client_id: o.clientId, plateaux: o.plateaux, unit_price: o.prixUnitaire,
+                delivery_date: o.dateLivraison, amount_paid: o.montantPaye,
+              });
+              await reload("orders");
+            }}
+            onUpdateClient={async (id, c) => { await updateRow("clients", id, c); await reload("clients"); await reload("orders"); }}
           />
         )}
 
@@ -326,6 +346,13 @@ export default function PoulaillerApp() {
             }}
             onDelete={async (id) => { await deleteRow("expenses", id); await reload("expenses"); }}
             onAddCategory={async (name) => { await insertRow("expense_categories", { name }); await reload("categories"); }}
+            onUpdate={async (id, e) => {
+              const photo_path = e.photo instanceof File ? await uploadPhoto(e.photo) : e.existingPhoto ?? null;
+              await updateRow("expenses", id, {
+                category_id: e.categoryId, amount: e.amount, expense_date: e.date, note: e.note, photo_path,
+              });
+              await reload("expenses");
+            }}
           />
         )}
 
@@ -341,6 +368,13 @@ export default function PoulaillerApp() {
               await reload("deaths");
             }}
             onDelete={async (id) => { await deleteRow("deaths", id); await reload("deaths"); }}
+            onUpdate={async (id, d) => {
+              const photo_path = d.photo instanceof File ? await uploadPhoto(d.photo) : d.existingPhoto ?? null;
+              await updateRow("deaths", id, {
+                death_date: d.date, count: d.count, cause: d.cause, race_id: d.raceId || null, photo_path,
+              });
+              await reload("deaths");
+            }}
           />
         )}
 
@@ -353,6 +387,10 @@ export default function PoulaillerApp() {
               await reload("vaccinations");
             }}
             onDelete={async (id) => { await deleteRow("vaccinations", id); await reload("vaccinations"); }}
+            onUpdate={async (id, v) => {
+              await updateRow("vaccinations", id, { vaccination_date: v.date, vaccine_name: v.vaccine, race_id: v.raceId || null });
+              await reload("vaccinations");
+            }}
           />
         )}
 
@@ -361,6 +399,7 @@ export default function PoulaillerApp() {
             races={races}
             onAdd={async (name) => { await insertRow("races", { name }); await reload("races"); }}
             onDelete={async (id) => { await deleteRow("races", id); await reload("races"); }}
+            onUpdate={async (id, name) => { await updateRow("races", id, { name }); await reload("races"); }}
           />
         )}
 
@@ -372,28 +411,57 @@ export default function PoulaillerApp() {
   );
 }
 
-function ProductionTab({ productions, races, onAdd, onDelete }) {
+function ProductionTab({ productions, races, onAdd, onDelete, onUpdate }) {
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [quantity, setQuantity] = useState("");
   const [prix, setPrix] = useState("");
   const [raceId, setRaceId] = useState(races[0]?.id || "");
   const [photo, setPhoto] = useState(null);
+  const [existingPhoto, setExistingPhoto] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
 
   const totalGeneral = productions.reduce((s, p) => s + Number(p.quantity || 0) * Number(p.unit_price || 0), 0);
+
+  function startEdit(p) {
+    setEditingId(p.id);
+    setDate(p.production_date);
+    setQuantity(String(p.quantity));
+    setPrix(String(p.unit_price));
+    setRaceId(p.race_id || "");
+    setPhoto(null);
+    setExistingPhoto(p.photo_path || null);
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setDate(new Date().toISOString().slice(0, 10));
+    setQuantity(""); setPrix(""); setPhoto(null); setExistingPhoto(null);
+  }
 
   async function submit(e) {
     e.preventDefault();
     if (!quantity) return;
     setSaving(true);
-    await onAdd({ date, quantity: Number(quantity), prixUnitaire: Number(prix || 0), raceId, photo });
-    setQuantity(""); setPrix(""); setPhoto(null); setSaving(false);
+    if (editingId) {
+      await onUpdate(editingId, { date, quantity: Number(quantity), prixUnitaire: Number(prix || 0), raceId, photo, existingPhoto });
+      cancelEdit();
+    } else {
+      await onAdd({ date, quantity: Number(quantity), prixUnitaire: Number(prix || 0), raceId, photo });
+      setQuantity(""); setPrix(""); setPhoto(null);
+    }
+    setSaving(false);
   }
 
   return (
     <div className="space-y-4">
       <StatCard label="Total général des plateaux récoltés" value={`${fmt(totalGeneral)} F`} sub={`${fmt(productions.reduce((s, p) => s + Number(p.quantity || 0), 0))} plateaux au total`} tone="emerald" />
       <Card>
+        {editingId && (
+          <div className="flex items-center justify-between bg-amber-50 text-amber-700 text-xs rounded-lg px-3 py-2 mb-3">
+            <span>Modification d'une récolte existante</span>
+            <button type="button" onClick={cancelEdit} className="font-medium underline">Annuler</button>
+          </div>
+        )}
         <form onSubmit={submit}>
           <Field label="Date"><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
           <Field label="Plateaux récoltés"><input type="number" min="0" className={inputCls} value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="ex: 12" /></Field>
@@ -403,9 +471,9 @@ function ProductionTab({ productions, races, onAdd, onDelete }) {
               {races.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
             </select>
           </Field>
-          <Field label="Preuve (photo)"><PhotoPicker value={photo} onChange={setPhoto} /></Field>
+          <Field label="Preuve (photo)"><PhotoPicker value={photo} onChange={setPhoto} existingUrl={photoUrl(existingPhoto)} /></Field>
           <button disabled={saving} className="w-full bg-emerald-700 text-white rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-1 disabled:opacity-50">
-            <Plus size={16} /> {saving ? "Enregistrement..." : "Enregistrer la récolte"}
+            <Plus size={16} /> {saving ? "Enregistrement..." : editingId ? "Mettre à jour la récolte" : "Enregistrer la récolte"}
           </button>
         </form>
       </Card>
@@ -421,7 +489,10 @@ function ProductionTab({ productions, races, onAdd, onDelete }) {
                 <div className="text-xs text-stone-500">{fmt(p.quantity)} plateaux × {fmt(p.unit_price)} F = {fmt(p.total_price)} F</div>
               </div>
             </div>
-            <button onClick={() => onDelete(p.id)} className="text-stone-300 hover:text-red-600"><Trash2 size={16} /></button>
+            <div className="flex items-center gap-1">
+              <button onClick={() => startEdit(p)} className="text-stone-300 hover:text-emerald-700 p-1"><Pencil size={16} /></button>
+              <button onClick={() => onDelete(p.id)} className="text-stone-300 hover:text-red-600 p-1"><Trash2 size={16} /></button>
+            </div>
           </Card>
         ))}
       </div>
@@ -429,18 +500,20 @@ function ProductionTab({ productions, races, onAdd, onDelete }) {
   );
 }
 
-function SalesTab({ clients, orders, onAddClient, onAddOrder, onDeleteOrder, onDeleteClient }) {
+function SalesTab({ clients, orders, onAddClient, onAddOrder, onDeleteOrder, onDeleteClient, onUpdateOrder, onUpdateClient }) {
   const [showClientForm, setShowClientForm] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [location, setLocation] = useState("");
   const [expandedClientId, setExpandedClientId] = useState(null);
+  const [editingClientId, setEditingClientId] = useState(null);
 
   const [clientId, setClientId] = useState(clients[0]?.id || "");
   const [plateaux, setPlateaux] = useState("");
   const [prixUnitaire, setPrixUnitaire] = useState("");
   const [dateLivraison, setDateLivraison] = useState(new Date().toISOString().slice(0, 10));
   const [montantPaye, setMontantPaye] = useState("");
+  const [editingOrderId, setEditingOrderId] = useState(null);
 
   useEffect(() => {
     if (!clientId && clients[0]) setClientId(clients[0].id);
@@ -452,15 +525,45 @@ function SalesTab({ clients, orders, onAddClient, onAddOrder, onDeleteOrder, onD
   async function submitClient(e) {
     e.preventDefault();
     if (!name) return;
-    await onAddClient({ name, phone, location });
+    if (editingClientId) {
+      await onUpdateClient(editingClientId, { name, phone, location });
+      setEditingClientId(null);
+    } else {
+      await onAddClient({ name, phone, location });
+    }
     setName(""); setPhone(""); setLocation(""); setShowClientForm(false);
+  }
+
+  function startEditClient(c) {
+    setEditingClientId(c.id);
+    setName(c.name); setPhone(c.phone || ""); setLocation(c.location || "");
+    setShowClientForm(true);
+  }
+
+  function startEditOrder(o) {
+    setEditingOrderId(o.id);
+    setClientId(o.client_id);
+    setPlateaux(String(o.plateaux));
+    setPrixUnitaire(String(o.unit_price));
+    setDateLivraison(o.delivery_date);
+    setMontantPaye(String(o.amount_paid));
+  }
+  function cancelEditOrder() {
+    setEditingOrderId(null);
+    setPlateaux(""); setPrixUnitaire(""); setMontantPaye("");
+    setDateLivraison(new Date().toISOString().slice(0, 10));
   }
 
   async function submitOrder(e) {
     e.preventDefault();
     if (!clientId || !plateaux) return;
-    await onAddOrder({ clientId, plateaux: Number(plateaux), prixUnitaire: Number(prixUnitaire || 0), dateLivraison, montantPaye: Number(montantPaye || 0) });
-    setPlateaux(""); setPrixUnitaire(""); setMontantPaye("");
+    if (editingOrderId) {
+      await onUpdateOrder(editingOrderId, { clientId, plateaux: Number(plateaux), prixUnitaire: Number(prixUnitaire || 0), dateLivraison, montantPaye: Number(montantPaye || 0) });
+      cancelEditOrder();
+    } else {
+      await onAddOrder({ clientId, plateaux: Number(plateaux), prixUnitaire: Number(prixUnitaire || 0), dateLivraison, montantPaye: Number(montantPaye || 0) });
+      setPlateaux(""); setPrixUnitaire(""); setMontantPaye("");
+    }
   }
 
   return (
@@ -468,16 +571,17 @@ function SalesTab({ clients, orders, onAddClient, onAddOrder, onDeleteOrder, onD
       <Card>
         <div className="flex items-center justify-between mb-2">
           <span className="text-sm font-medium text-stone-700">Clients — historique par client</span>
-          <button onClick={() => setShowClientForm((v) => !v)} className="text-xs text-emerald-700 flex items-center gap-1">
+          <button onClick={() => { setShowClientForm((v) => !v); setEditingClientId(null); setName(""); setPhone(""); setLocation(""); }} className="text-xs text-emerald-700 flex items-center gap-1">
             <Plus size={14} /> Nouveau client
           </button>
         </div>
         {showClientForm && (
           <form onSubmit={submitClient} className="mb-3 bg-stone-50 rounded-lg p-3">
+            {editingClientId && <div className="text-xs text-amber-700 mb-2">Modification du client</div>}
             <Field label="Nom"><input className={inputCls} value={name} onChange={(e) => setName(e.target.value)} /></Field>
             <Field label="Numéro"><input className={inputCls} value={phone} onChange={(e) => setPhone(e.target.value)} /></Field>
             <Field label="Localisation"><input className={inputCls} value={location} onChange={(e) => setLocation(e.target.value)} /></Field>
-            <button className="w-full bg-emerald-700 text-white rounded-lg py-2 text-sm">Ajouter le client</button>
+            <button className="w-full bg-emerald-700 text-white rounded-lg py-2 text-sm">{editingClientId ? "Mettre à jour le client" : "Ajouter le client"}</button>
           </form>
         )}
         {clients.length === 0 && <p className="text-xs text-stone-400">Aucun client enregistré.</p>}
@@ -495,9 +599,10 @@ function SalesTab({ clients, orders, onAddClient, onAddOrder, onDeleteOrder, onD
                     <div className="text-sm font-medium text-stone-800">{c.name}</div>
                     <div className="text-xs text-stone-500">{c.phone}{c.location ? ` · ${c.location}` : ""} — {clientOrders.length} commande{clientOrders.length > 1 ? "s" : ""}</div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {cDue > 0 && <span className="text-xs font-medium text-red-600">Doit {fmt(cDue)} F</span>}
-                    <button onClick={(e) => { e.stopPropagation(); onDeleteClient(c.id); }} className="text-stone-300 hover:text-red-600"><Trash2 size={16} /></button>
+                  <div className="flex items-center gap-1">
+                    {cDue > 0 && <span className="text-xs font-medium text-red-600 mr-1">Doit {fmt(cDue)} F</span>}
+                    <button onClick={(e) => { e.stopPropagation(); startEditClient(c); }} className="text-stone-300 hover:text-emerald-700 p-1"><Pencil size={16} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); onDeleteClient(c.id); }} className="text-stone-300 hover:text-red-600 p-1"><Trash2 size={16} /></button>
                   </div>
                 </button>
                 {isOpen && (
@@ -520,7 +625,10 @@ function SalesTab({ clients, orders, onAddClient, onAddOrder, onDeleteOrder, onD
                                 <div className="font-medium text-stone-700">{o.delivery_date}</div>
                                 <div className="text-stone-500">{o.plateaux} plateaux — {fmt(t)} F{r > 0 ? ` — reste ${fmt(r)} F` : " — soldé"}</div>
                               </div>
-                              <button onClick={() => onDeleteOrder(o.id)} className="text-stone-300 hover:text-red-600"><Trash2 size={14} /></button>
+                              <div className="flex items-center gap-1">
+                                <button onClick={() => startEditOrder(o)} className="text-stone-300 hover:text-emerald-700 p-1"><Pencil size={14} /></button>
+                                <button onClick={() => onDeleteOrder(o.id)} className="text-stone-300 hover:text-red-600 p-1"><Trash2 size={14} /></button>
+                              </div>
                             </div>
                           );
                         })}
@@ -535,7 +643,10 @@ function SalesTab({ clients, orders, onAddClient, onAddOrder, onDeleteOrder, onD
       </Card>
 
       <Card>
-        <div className="text-sm font-medium text-stone-700 mb-2">Nouvelle commande</div>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-sm font-medium text-stone-700">{editingOrderId ? "Modifier la commande" : "Nouvelle commande"}</div>
+          {editingOrderId && <button type="button" onClick={cancelEditOrder} className="text-xs text-amber-700 underline">Annuler</button>}
+        </div>
         <form onSubmit={submitOrder}>
           <Field label="Client">
             <select className={inputCls} value={clientId} onChange={(e) => setClientId(e.target.value)}>
@@ -551,7 +662,7 @@ function SalesTab({ clients, orders, onAddClient, onAddOrder, onDeleteOrder, onD
             <span className={reste > 0 ? "text-red-600" : "text-emerald-700"}>Reste : <b>{fmt(reste)} F</b></span>
           </div>
           <button className="w-full bg-emerald-700 text-white rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-1" disabled={!clients.length}>
-            <Plus size={16} /> Enregistrer la commande
+            <Plus size={16} /> {editingOrderId ? "Mettre à jour la commande" : "Enregistrer la commande"}
           </button>
           {!clients.length && <p className="text-xs text-red-500 mt-2">Ajoute d'abord un client.</p>}
         </form>
@@ -570,7 +681,10 @@ function SalesTab({ clients, orders, onAddClient, onAddOrder, onDeleteOrder, onD
                 <div className="text-xs text-stone-500">{o.plateaux} plateaux — {fmt(t)} F total — payé {fmt(o.amount_paid)} F</div>
                 <div className={`text-xs font-medium ${r > 0 ? "text-red-600" : "text-emerald-700"}`}>{r > 0 ? `Reste ${fmt(r)} F` : "Soldé"}</div>
               </div>
-              <button onClick={() => onDeleteOrder(o.id)} className="text-stone-300 hover:text-red-600"><Trash2 size={16} /></button>
+              <div className="flex items-center gap-1">
+                <button onClick={() => startEditOrder(o)} className="text-stone-300 hover:text-emerald-700 p-1"><Pencil size={16} /></button>
+                <button onClick={() => onDeleteOrder(o.id)} className="text-stone-300 hover:text-red-600 p-1"><Trash2 size={16} /></button>
+              </div>
             </Card>
           );
         })}
@@ -579,14 +693,16 @@ function SalesTab({ clients, orders, onAddClient, onAddOrder, onDeleteOrder, onD
   );
 }
 
-function ExpensesTab({ expenses, categories, onAdd, onDelete, onAddCategory }) {
+function ExpensesTab({ expenses, categories, onAdd, onDelete, onAddCategory, onUpdate }) {
   const [categoryId, setCategoryId] = useState(categories[0]?.id || "");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [note, setNote] = useState("");
   const [photo, setPhoto] = useState(null);
+  const [existingPhoto, setExistingPhoto] = useState(null);
   const [newCat, setNewCat] = useState("");
   const [showNewCat, setShowNewCat] = useState(false);
+  const [editingId, setEditingId] = useState(null);
 
   useEffect(() => {
     if (!categoryId && categories[0]) setCategoryId(categories[0].id);
@@ -594,11 +710,31 @@ function ExpensesTab({ expenses, categories, onAdd, onDelete, onAddCategory }) {
 
   const total = expenses.reduce((s, e) => s + Number(e.amount || 0), 0);
 
+  function startEdit(e) {
+    setEditingId(e.id);
+    setCategoryId(e.category_id);
+    setAmount(String(e.amount));
+    setDate(e.expense_date);
+    setNote(e.note || "");
+    setPhoto(null);
+    setExistingPhoto(e.photo_path || null);
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setAmount(""); setNote(""); setPhoto(null); setExistingPhoto(null);
+    setDate(new Date().toISOString().slice(0, 10));
+  }
+
   async function submit(e) {
     e.preventDefault();
     if (!amount) return;
-    await onAdd({ categoryId, amount: Number(amount), date, note, photo });
-    setAmount(""); setNote(""); setPhoto(null);
+    if (editingId) {
+      await onUpdate(editingId, { categoryId, amount: Number(amount), date, note, photo, existingPhoto });
+      cancelEdit();
+    } else {
+      await onAdd({ categoryId, amount: Number(amount), date, note, photo });
+      setAmount(""); setNote(""); setPhoto(null);
+    }
   }
 
   async function addCat(e) {
@@ -612,6 +748,12 @@ function ExpensesTab({ expenses, categories, onAdd, onDelete, onAddCategory }) {
     <div className="space-y-4">
       <StatCard label="Total des dépenses" value={`${fmt(total)} F`} tone="amber" />
       <Card>
+        {editingId && (
+          <div className="flex items-center justify-between bg-amber-50 text-amber-700 text-xs rounded-lg px-3 py-2 mb-3">
+            <span>Modification d'une dépense existante</span>
+            <button type="button" onClick={cancelEdit} className="font-medium underline">Annuler</button>
+          </div>
+        )}
         <form onSubmit={submit}>
           <Field label="Catégorie">
             <div className="flex gap-2">
@@ -630,9 +772,9 @@ function ExpensesTab({ expenses, categories, onAdd, onDelete, onAddCategory }) {
           <Field label="Montant (F)"><input type="number" className={inputCls} value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
           <Field label="Date"><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
           <Field label="Note (optionnel)"><input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
-          <Field label="Preuve (photo)"><PhotoPicker value={photo} onChange={setPhoto} /></Field>
+          <Field label="Preuve (photo)"><PhotoPicker value={photo} onChange={setPhoto} existingUrl={photoUrl(existingPhoto)} /></Field>
           <button className="w-full bg-amber-600 text-white rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-1">
-            <Plus size={16} /> Enregistrer la dépense
+            <Plus size={16} /> {editingId ? "Mettre à jour la dépense" : "Enregistrer la dépense"}
           </button>
         </form>
       </Card>
@@ -648,7 +790,10 @@ function ExpensesTab({ expenses, categories, onAdd, onDelete, onAddCategory }) {
                 <div className="text-xs text-stone-500">{e.expense_date}{e.note ? ` — ${e.note}` : ""}</div>
               </div>
             </div>
-            <button onClick={() => onDelete(e.id)} className="text-stone-300 hover:text-red-600"><Trash2 size={16} /></button>
+            <div className="flex items-center gap-1">
+              <button onClick={() => startEdit(e)} className="text-stone-300 hover:text-emerald-700 p-1"><Pencil size={16} /></button>
+              <button onClick={() => onDelete(e.id)} className="text-stone-300 hover:text-red-600 p-1"><Trash2 size={16} /></button>
+            </div>
           </Card>
         ))}
       </div>
@@ -656,26 +801,54 @@ function ExpensesTab({ expenses, categories, onAdd, onDelete, onAddCategory }) {
   );
 }
 
-function DeathsTab({ deaths, races, onAdd, onDelete }) {
+function DeathsTab({ deaths, races, onAdd, onDelete, onUpdate }) {
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [count, setCount] = useState("");
   const [cause, setCause] = useState("");
   const [raceId, setRaceId] = useState(races[0]?.id || "");
   const [photo, setPhoto] = useState(null);
+  const [existingPhoto, setExistingPhoto] = useState(null);
+  const [editingId, setEditingId] = useState(null);
 
   const total = deaths.reduce((s, d) => s + Number(d.count || 0), 0);
+
+  function startEdit(d) {
+    setEditingId(d.id);
+    setDate(d.death_date);
+    setCount(String(d.count));
+    setCause(d.cause || "");
+    setRaceId(d.race_id || "");
+    setPhoto(null);
+    setExistingPhoto(d.photo_path || null);
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setCount(""); setCause(""); setPhoto(null); setExistingPhoto(null);
+    setDate(new Date().toISOString().slice(0, 10));
+  }
 
   async function submit(e) {
     e.preventDefault();
     if (!count) return;
-    await onAdd({ date, count: Number(count), cause, raceId, photo });
-    setCount(""); setCause(""); setPhoto(null);
+    if (editingId) {
+      await onUpdate(editingId, { date, count: Number(count), cause, raceId, photo, existingPhoto });
+      cancelEdit();
+    } else {
+      await onAdd({ date, count: Number(count), cause, raceId, photo });
+      setCount(""); setCause(""); setPhoto(null);
+    }
   }
 
   return (
     <div className="space-y-4">
       <StatCard label="Total décès enregistrés" value={fmt(total)} tone="red" />
       <Card>
+        {editingId && (
+          <div className="flex items-center justify-between bg-amber-50 text-amber-700 text-xs rounded-lg px-3 py-2 mb-3">
+            <span>Modification d'un décès existant</span>
+            <button type="button" onClick={cancelEdit} className="font-medium underline">Annuler</button>
+          </div>
+        )}
         <form onSubmit={submit}>
           <Field label="Date"><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
           <Field label="Nombre"><input type="number" min="0" className={inputCls} value={count} onChange={(e) => setCount(e.target.value)} /></Field>
@@ -685,9 +858,9 @@ function DeathsTab({ deaths, races, onAdd, onDelete }) {
               {races.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
             </select>
           </Field>
-          <Field label="Preuve (photo)"><PhotoPicker value={photo} onChange={setPhoto} /></Field>
+          <Field label="Preuve (photo)"><PhotoPicker value={photo} onChange={setPhoto} existingUrl={photoUrl(existingPhoto)} /></Field>
           <button className="w-full bg-red-600 text-white rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-1">
-            <Plus size={16} /> Enregistrer
+            <Plus size={16} /> {editingId ? "Mettre à jour" : "Enregistrer"}
           </button>
         </form>
       </Card>
@@ -703,7 +876,10 @@ function DeathsTab({ deaths, races, onAdd, onDelete }) {
                 <div className="text-xs text-stone-500">{d.cause || "Motif non précisé"}</div>
               </div>
             </div>
-            <button onClick={() => onDelete(d.id)} className="text-stone-300 hover:text-red-600"><Trash2 size={16} /></button>
+            <div className="flex items-center gap-1">
+              <button onClick={() => startEdit(d)} className="text-stone-300 hover:text-emerald-700 p-1"><Pencil size={16} /></button>
+              <button onClick={() => onDelete(d.id)} className="text-stone-300 hover:text-red-600 p-1"><Trash2 size={16} /></button>
+            </div>
           </Card>
         ))}
       </div>
@@ -711,21 +887,45 @@ function DeathsTab({ deaths, races, onAdd, onDelete }) {
   );
 }
 
-function VaccinationTab({ vaccinations, races, onAdd, onDelete }) {
+function VaccinationTab({ vaccinations, races, onAdd, onDelete, onUpdate }) {
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [vaccine, setVaccine] = useState("");
   const [raceId, setRaceId] = useState(races[0]?.id || "");
+  const [editingId, setEditingId] = useState(null);
+
+  function startEdit(v) {
+    setEditingId(v.id);
+    setDate(v.vaccination_date);
+    setVaccine(v.vaccine_name);
+    setRaceId(v.race_id || "");
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setVaccine("");
+    setDate(new Date().toISOString().slice(0, 10));
+  }
 
   async function submit(e) {
     e.preventDefault();
     if (!vaccine) return;
-    await onAdd({ date, vaccine, raceId });
-    setVaccine("");
+    if (editingId) {
+      await onUpdate(editingId, { date, vaccine, raceId });
+      cancelEdit();
+    } else {
+      await onAdd({ date, vaccine, raceId });
+      setVaccine("");
+    }
   }
 
   return (
     <div className="space-y-4">
       <Card>
+        {editingId && (
+          <div className="flex items-center justify-between bg-amber-50 text-amber-700 text-xs rounded-lg px-3 py-2 mb-3">
+            <span>Modification d'une vaccination existante</span>
+            <button type="button" onClick={cancelEdit} className="font-medium underline">Annuler</button>
+          </div>
+        )}
         <form onSubmit={submit}>
           <Field label="Date"><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
           <Field label="Vaccin"><input className={inputCls} value={vaccine} onChange={(e) => setVaccine(e.target.value)} placeholder="ex: Newcastle" /></Field>
@@ -735,7 +935,7 @@ function VaccinationTab({ vaccinations, races, onAdd, onDelete }) {
             </select>
           </Field>
           <button className="w-full bg-emerald-700 text-white rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-1">
-            <Plus size={16} /> Enregistrer la vaccination
+            <Plus size={16} /> {editingId ? "Mettre à jour" : "Enregistrer la vaccination"}
           </button>
         </form>
       </Card>
@@ -748,7 +948,10 @@ function VaccinationTab({ vaccinations, races, onAdd, onDelete }) {
               <div className="text-sm font-medium text-stone-800">{v.vaccine_name}</div>
               <div className="text-xs text-stone-500">{v.vaccination_date} · {v.race_name || "—"}</div>
             </div>
-            <button onClick={() => onDelete(v.id)} className="text-stone-300 hover:text-red-600"><Trash2 size={16} /></button>
+            <div className="flex items-center gap-1">
+              <button onClick={() => startEdit(v)} className="text-stone-300 hover:text-emerald-700 p-1"><Pencil size={16} /></button>
+              <button onClick={() => onDelete(v.id)} className="text-stone-300 hover:text-red-600 p-1"><Trash2 size={16} /></button>
+            </div>
           </Card>
         ))}
       </div>
@@ -756,13 +959,21 @@ function VaccinationTab({ vaccinations, races, onAdd, onDelete }) {
   );
 }
 
-function RacesTab({ races, onAdd, onDelete }) {
+function RacesTab({ races, onAdd, onDelete, onUpdate }) {
   const [name, setName] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editValue, setEditValue] = useState("");
+
   async function submit(e) {
     e.preventDefault();
     if (!name) return;
     await onAdd(name);
     setName("");
+  }
+  async function saveEdit(id) {
+    if (!editValue.trim()) return;
+    await onUpdate(id, editValue.trim());
+    setEditingId(null);
   }
   return (
     <div className="space-y-4">
@@ -775,8 +986,25 @@ function RacesTab({ races, onAdd, onDelete }) {
       <div className="space-y-2">
         {races.map((r) => (
           <Card key={r.id} className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-medium text-stone-800"><Bird size={16} className="text-emerald-700" /> {r.name}</div>
-            <button onClick={() => onDelete(r.id)} className="text-stone-300 hover:text-red-600"><Trash2 size={16} /></button>
+            {editingId === r.id ? (
+              <input
+                autoFocus
+                className={inputCls}
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && saveEdit(r.id)}
+              />
+            ) : (
+              <div className="flex items-center gap-2 text-sm font-medium text-stone-800"><Bird size={16} className="text-emerald-700" /> {r.name}</div>
+            )}
+            <div className="flex items-center gap-1 ml-2">
+              {editingId === r.id ? (
+                <button onClick={() => saveEdit(r.id)} className="text-xs text-emerald-700 font-medium px-2">OK</button>
+              ) : (
+                <button onClick={() => { setEditingId(r.id); setEditValue(r.name); }} className="text-stone-300 hover:text-emerald-700 p-1"><Pencil size={16} /></button>
+              )}
+              <button onClick={() => onDelete(r.id)} className="text-stone-300 hover:text-red-600 p-1"><Trash2 size={16} /></button>
+            </div>
           </Card>
         ))}
       </div>
