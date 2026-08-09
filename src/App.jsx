@@ -411,9 +411,17 @@ export default function PoulaillerApp() {
   );
 }
 
+const EGGS_PER_PLATEAU = 30;
+function plateauxBreakdown(quantity) {
+  const q = Number(quantity) || 0;
+  const complete = Math.floor(q + 1e-9);
+  const remainderEggs = Math.round((q - complete) * EGGS_PER_PLATEAU);
+  return { complete, remainderEggs };
+}
+
 function ProductionTab({ productions, races, onAdd, onDelete, onUpdate }) {
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [quantity, setQuantity] = useState("");
+  const [eggs, setEggs] = useState("");
   const [prix, setPrix] = useState("");
   const [raceId, setRaceId] = useState(races[0]?.id || "");
   const [photo, setPhoto] = useState(null);
@@ -422,11 +430,14 @@ function ProductionTab({ productions, races, onAdd, onDelete, onUpdate }) {
   const [editingId, setEditingId] = useState(null);
 
   const totalGeneral = productions.reduce((s, p) => s + Number(p.quantity || 0) * Number(p.unit_price || 0), 0);
+  const eggsCount = Number(eggs) || 0;
+  const quantity = Math.round((eggsCount / EGGS_PER_PLATEAU) * 100) / 100;
+  const { complete: previewComplete, remainderEggs: previewRemainder } = plateauxBreakdown(quantity);
 
   function startEdit(p) {
     setEditingId(p.id);
     setDate(p.production_date);
-    setQuantity(String(p.quantity));
+    setEggs(String(Math.round(Number(p.quantity) * EGGS_PER_PLATEAU)));
     setPrix(String(p.unit_price));
     setRaceId(p.race_id || "");
     setPhoto(null);
@@ -435,19 +446,19 @@ function ProductionTab({ productions, races, onAdd, onDelete, onUpdate }) {
   function cancelEdit() {
     setEditingId(null);
     setDate(new Date().toISOString().slice(0, 10));
-    setQuantity(""); setPrix(""); setPhoto(null); setExistingPhoto(null);
+    setEggs(""); setPrix(""); setPhoto(null); setExistingPhoto(null);
   }
 
   async function submit(e) {
     e.preventDefault();
-    if (!quantity) return;
+    if (!eggs) return;
     setSaving(true);
     if (editingId) {
-      await onUpdate(editingId, { date, quantity: Number(quantity), prixUnitaire: Number(prix || 0), raceId, photo, existingPhoto });
+      await onUpdate(editingId, { date, quantity, prixUnitaire: Number(prix || 0), raceId, photo, existingPhoto });
       cancelEdit();
     } else {
-      await onAdd({ date, quantity: Number(quantity), prixUnitaire: Number(prix || 0), raceId, photo });
-      setQuantity(""); setPrix(""); setPhoto(null);
+      await onAdd({ date, quantity, prixUnitaire: Number(prix || 0), raceId, photo });
+      setEggs(""); setPrix(""); setPhoto(null);
     }
     setSaving(false);
   }
@@ -464,7 +475,13 @@ function ProductionTab({ productions, races, onAdd, onDelete, onUpdate }) {
         )}
         <form onSubmit={submit}>
           <Field label="Date"><input type="date" className={inputCls} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
-          <Field label="Plateaux récoltés"><input type="number" min="0" className={inputCls} value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="ex: 12" /></Field>
+          <Field label="Nombre d'œufs récoltés"><input type="number" min="0" className={inputCls} value={eggs} onChange={(e) => setEggs(e.target.value)} placeholder="ex: 223" /></Field>
+          {eggsCount > 0 && (
+            <div className="bg-emerald-50 text-emerald-700 text-xs rounded-lg px-3 py-2 mb-3">
+              = {previewComplete} plateau{previewComplete > 1 ? "x" : ""} complet{previewComplete > 1 ? "s" : ""}
+              {previewRemainder > 0 ? ` + ${previewRemainder} œufs` : ""} ({quantity.toLocaleString("fr-FR")} plateaux)
+            </div>
+          )}
           <Field label="Prix par plateau (F)"><input type="number" min="0" className={inputCls} value={prix} onChange={(e) => setPrix(e.target.value)} placeholder="ex: 2500" /></Field>
           <Field label="Race">
             <select className={inputCls} value={raceId} onChange={(e) => setRaceId(e.target.value)}>
@@ -480,21 +497,26 @@ function ProductionTab({ productions, races, onAdd, onDelete, onUpdate }) {
       <div className="space-y-2">
         <div className="text-xs font-medium text-stone-500 px-1">Historique des récoltes</div>
         {productions.length === 0 && <p className="text-sm text-stone-400">Aucune récolte enregistrée pour l'instant.</p>}
-        {byDateDesc(productions, "production_date").map((p) => (
-          <Card key={p.id} className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              {p.photo_path && <img src={photoUrl(p.photo_path)} className="w-12 h-12 rounded-lg object-cover" alt="" />}
-              <div>
-                <div className="text-sm font-medium text-stone-800">{p.production_date} · {p.race_name || "—"}</div>
-                <div className="text-xs text-stone-500">{fmt(p.quantity)} plateaux × {fmt(p.unit_price)} F = {fmt(p.total_price)} F</div>
+        {byDateDesc(productions, "production_date").map((p) => {
+          const { complete, remainderEggs } = plateauxBreakdown(p.quantity);
+          return (
+            <Card key={p.id} className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {p.photo_path && <img src={photoUrl(p.photo_path)} className="w-12 h-12 rounded-lg object-cover" alt="" />}
+                <div>
+                  <div className="text-sm font-medium text-stone-800">{p.production_date} · {p.race_name || "—"}</div>
+                  <div className="text-xs text-stone-500">
+                    {complete} plateau{complete > 1 ? "x" : ""}{remainderEggs > 0 ? ` + ${remainderEggs} œufs` : ""} × {fmt(p.unit_price)} F = {fmt(p.total_price)} F
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-1">
-              <button onClick={() => startEdit(p)} className="text-stone-300 hover:text-emerald-700 p-1"><Pencil size={16} /></button>
-              <button onClick={() => onDelete(p.id)} className="text-stone-300 hover:text-red-600 p-1"><Trash2 size={16} /></button>
-            </div>
-          </Card>
-        ))}
+              <div className="flex items-center gap-1">
+                <button onClick={() => startEdit(p)} className="text-stone-300 hover:text-emerald-700 p-1"><Pencil size={16} /></button>
+                <button onClick={() => onDelete(p.id)} className="text-stone-300 hover:text-red-600 p-1"><Trash2 size={16} /></button>
+              </div>
+            </Card>
+          );
+        })}
       </div>
     </div>
   );
