@@ -119,10 +119,12 @@ function StatCard({ label, value, sub, tone = "emerald" }) {
   );
 }
 
-function ProjectSelector({ projects, onSelect, onCreate }) {
+function ProjectSelector({ projects, onSelect, onCreate, onDelete }) {
   const [showNew, setShowNew] = useState(false);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   async function submit(e) {
     e.preventDefault();
@@ -130,6 +132,13 @@ function ProjectSelector({ projects, onSelect, onCreate }) {
     setCreating(true);
     await onCreate(name.trim());
     setCreating(false);
+  }
+
+  async function confirmDelete(id) {
+    setDeleting(true);
+    await onDelete(id);
+    setDeleting(false);
+    setConfirmDeleteId(null);
   }
 
   return (
@@ -147,14 +156,43 @@ function ProjectSelector({ projects, onSelect, onCreate }) {
         )}
         <div className="space-y-2">
           {projects.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => onSelect(p.id)}
-              className="w-full text-left bg-white rounded-2xl border border-stone-200 p-4 hover:border-emerald-400 flex items-center justify-between"
-            >
-              <span className="text-sm font-medium text-stone-800">{p.name}</span>
-              <span className="text-emerald-700 text-sm">Entrer →</span>
-            </button>
+            <div key={p.id} className="bg-white rounded-2xl border border-stone-200 overflow-hidden">
+              {confirmDeleteId === p.id ? (
+                <div className="p-4 bg-red-50">
+                  <p className="text-sm text-red-700 font-medium mb-1">Supprimer "{p.name}" ?</p>
+                  <p className="text-xs text-red-600 mb-3">Toutes les données de ce projet (récoltes, ventes, dépenses, photos...) seront définitivement perdues. Cette action est irréversible.</p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="flex-1 bg-white text-stone-600 border border-stone-200 rounded-lg py-2 text-sm font-medium"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      disabled={deleting}
+                      onClick={() => confirmDelete(p.id)}
+                      className="flex-1 bg-red-600 text-white rounded-lg py-2 text-sm font-medium disabled:opacity-50"
+                    >
+                      {deleting ? "Suppression..." : "Oui, supprimer définitivement"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center">
+                  <button onClick={() => onSelect(p.id)} className="flex-1 text-left p-4 hover:bg-stone-50 flex items-center justify-between">
+                    <span className="text-sm font-medium text-stone-800">{p.name}</span>
+                    <span className="text-emerald-700 text-sm">Entrer →</span>
+                  </button>
+                  <button
+                    onClick={() => setConfirmDeleteId(p.id)}
+                    className="px-3 self-stretch text-stone-300 hover:text-red-600 hover:bg-red-50"
+                    title="Supprimer ce projet"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              )}
+            </div>
           ))}
         </div>
 
@@ -218,6 +256,11 @@ export default function PoulaillerApp() {
     }
     await loadProjects();
     selectProject(pid);
+  }
+
+  async function deleteProject(id) {
+    await deleteRow("projects", id);
+    await loadProjects();
   }
 
   function selectProject(id) {
@@ -334,7 +377,7 @@ export default function PoulaillerApp() {
   }
 
   if (!currentProjectId) {
-    return <ProjectSelector projects={projects} onSelect={selectProject} onCreate={createProject} />;
+    return <ProjectSelector projects={projects} onSelect={selectProject} onCreate={createProject} onDelete={deleteProject} />;
   }
 
   if (!ready) {
